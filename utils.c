@@ -1,11 +1,12 @@
 #include "utils.h"
-#include <stdio.h>
+#include "builtins.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #define SHELL_NAME "cshell"
 #define LINE_BUFSIZE 1024
 #define TOKEN_BUFSIZE 64
+#define TOKEN_SEP " \t\r\n\a"
 
 char *get_input() {
   int capacity = LINE_BUFSIZE;
@@ -13,6 +14,11 @@ char *get_input() {
   int count = 0;
   // buffer to hold user input
   char *buffer = malloc(sizeof(char) * capacity);
+  if (buffer == NULL) {
+    fprintf(stderr, "cshell: allocation erorr\n");
+    return NULL;
+  }
+
   printf("%s $ ", SHELL_NAME);
   while (1) {
     c = getchar();
@@ -25,8 +31,12 @@ char *get_input() {
     buffer[count++] = c;
     // If input size exceds double the capacity
     if (count >= capacity) {
-      capacity *= 2;
+      capacity += LINE_BUFSIZE;
       buffer = realloc(buffer, sizeof(char) * capacity);
+      if (buffer == NULL) {
+        fprintf(stderr, "cshell: allocation error");
+        return NULL;
+      }
     }
   }
 }
@@ -41,20 +51,25 @@ void printtokens(char **tokens) {
 
 char **parse_input(char *input) {
   char *token;
-  int bufsize = TOKEN_BUFSIZE;
-  char **tokens = malloc(sizeof(char *) * bufsize);
-  char *delimeter = " ";
+  int capacity = TOKEN_BUFSIZE;
+  char **tokens = malloc(sizeof(char *) * capacity);
+  if (tokens == NULL) {
+    fprintf(stderr, "cshell: allocation erorr\n");
+    return NULL;
+  }
+
+  char *seperator = TOKEN_SEP;
   int count = 0;
 
-  token = strtok(input, delimeter);
+  token = strtok(input, seperator);
   while (token != NULL) {
     tokens[count++] = token;
-    if (count >= bufsize) {
-      bufsize *= 2;
-      tokens = realloc(tokens, sizeof(char *) * bufsize);
+    if (count >= capacity) {
+      capacity *= TOKEN_BUFSIZE;
+      tokens = realloc(tokens, sizeof(char *) * capacity);
     }
 
-    token = strtok(NULL, delimeter);
+    token = strtok(NULL, seperator);
   }
 
   tokens[count] = NULL;
@@ -62,10 +77,21 @@ char **parse_input(char *input) {
 }
 
 int command_execute(char **command) {
+  if (command[0] == NULL) {
+    // Empty command recieved.
+    return 1;
+  }
+  for (int i = 0; i < num_builtins(); i++) {
+    if (strcmp(command[0], builtins[i]) == 0) {
+      return (*builtins_func[i])(command);
+    }
+  }
+
   pid_t pid = fork();
   int status;
   if (pid < 0) {
     perror("fork failed");
+    return 0; // stop the shell
   } else if (pid == 0) {
     // child process
     if (execvp(command[0], command) < 0) {
@@ -74,8 +100,15 @@ int command_execute(char **command) {
     }
   } else {
     // parent process
-    waitpid(pid, &status, WUNTRACED);
+    // run the loop till the child terminates
+    do {
+      waitpid(pid, &status, WUNTRACED);
+    } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+
+    // WIFEXITED(status) --> true if child terminated normally
+    // WIFSIGNALED(status) --> true if child was killed by a signal
   }
+
   return 1;
 }
 
@@ -83,7 +116,9 @@ void loop() {
   char *prompt = "";
   char **command;
   char *line;
-  while (1) {
+  int status;
+
+  do {
     // read input
     line = get_input();
 
@@ -91,8 +126,9 @@ void loop() {
     command = parse_input(line);
 
     // exectue command
-    command_execute(command);
-  }
+    status = command_execute(command);
+  } while (status);
 
   free(line);
+  free(command);
 }

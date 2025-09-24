@@ -1,4 +1,5 @@
 #include "utils.h"
+#include <stdlib.h>
 
 int main() {
     // load config 
@@ -7,5 +8,6 @@ int main() {
     loop();
     
     // system shutdown, and cleanup
-    return 0;
+
+    return EXIT_SUCCESS;
 }
