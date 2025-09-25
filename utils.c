@@ -1,12 +1,20 @@
 #include "utils.h"
 #include "builtins.h"
-#include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/wait.h>
 #define SHELL_NAME "cshell"
 #define LINE_BUFSIZE 1024
 #define TOKEN_BUFSIZE 64
 #define TOKEN_SEP " \t\r\n\a"
+
+int jmp_set;
+sigjmp_buf env;
+void sigint_handler(int signal) {
+  if (jmp_set) {
+    siglongjmp(env, 42);
+  }
+}
 
 char *get_input() {
   int capacity = LINE_BUFSIZE;
@@ -118,7 +126,18 @@ void loop() {
   char *line;
   int status;
 
+  struct sigaction sa;
+  sa.sa_handler = sigint_handler;
+  sa.sa_flags = 0;
+  sigemptyset(&sa.sa_mask);
+
+  sigaction(SIGINT, &sa, NULL);
   do {
+    if (sigsetjmp(env, 1) == 42) {
+      printf("\n");
+    }
+    jmp_set = 1;
+
     // read input
     line = get_input();
 
