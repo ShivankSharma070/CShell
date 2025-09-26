@@ -55,10 +55,19 @@ char *get_input() {
   return NULL;
 }
 
-void printtokens(char **tokens) {
+typedef struct token token_t;
+
+typedef struct token {
+  char *data;
+  char *sep_operator;
+} token_t;
+
+void printtokens(token_t **tokens) {
   int count = 0;
   while (tokens[count] != NULL) {
-    printf("%s-", tokens[count++]);
+    printf("%s with operator %s\n", tokens[count]->data,
+           tokens[count]->sep_operator);
+    count++;
   }
   printf("\n");
 }
@@ -143,39 +152,101 @@ void resolve_env(char **command) {
   }
 }
 
-int run_command(char *line) {
-  int semicolon = ';';
-  char *and = "&&";
-  char *or = "||";
-  char **commands;
-  int status = EXIT_SUCCESS;
-  if (strchr(line, semicolon)) {
-    commands = parse_input(line, ";");
-    for (int i = 0; commands[i] != NULL; i++) {
-      status = run_command(commands[i]);
+token_t **parser(char *input) {
+  token_t **tokens = malloc(sizeof(token_t *) * 20);
+  char *start = input;
+  int depth = 0;
+  char *p = input;
+  int count = 0;
+
+  while (*p) {
+    // Handle parenthesis
+    if (*p == '(')
+      depth++;
+    else if (*p == ')')
+      if (depth > 0)
+        depth--;
+
+    if (depth == 0) {
+      int seperator_len = 0;
+      char *sep;
+      if (p[0] == ';') {
+        seperator_len = 1;
+        sep = ";";
+      } else if (p[0] == '&' && p[1] == '&') {
+        seperator_len = 2;
+        sep = "&&";
+      } else if (p[0] == '|' && p[1] == '|') {
+        seperator_len = 2;
+        sep = "||";
+      }
+
+      if (seperator_len > 0) {
+        size_t len = p - start;
+        token_t *token = malloc(sizeof(token_t));
+        token->data = strndup(start, len);
+        token->sep_operator = sep;
+        tokens[count++] = token;
+        p += seperator_len;
+        start = p;
+      }
     }
-    return status;
-  }
-  if (strstr(line, and)) {
-    commands = parse_input(line, and);
-    for (int i = 0; commands[i] != NULL && status == EXIT_SUCCESS; i++) {
-      status = run_command(commands[i]);
-    }
-    return status;
+    p++;
   }
 
-  if (strstr(line, or)) {
-    commands = parse_input(line, or);
-    status = EXIT_FAILURE;
-    for (int i = 0; commands[i] != NULL && status == EXIT_FAILURE; i++) {
-      status = run_command(commands[i]);
-    }
-    return status;
+  if (p > start) {
+    size_t len = p - start;
+    token_t *token = malloc(sizeof(token_t));
+    token->data = strndup(start, len);
+    token->sep_operator = "";
+    tokens[count++] = token;
   }
 
-  commands = parse_input(line, " ");
-  resolve_env(commands);
-  status = command_execute(commands);
+  tokens[count] = NULL;
+
+  return tokens;
+}
+
+int run_command(token_t **tokens) {
+  int status = 1;
+  char **command;
+  for (int i = 0; tokens[i] != NULL; i++) {
+    token_t *token = tokens[i];
+    if (strchr(token->data, '(') && strchr(token->data, ')')) {
+      char *first = strchr(token->data, '(');
+      char *last = strchr(token->data, ')');
+      char *data = strndup(first + 1, last - first - 1);
+      pid_t pid = fork();
+      if (pid == 0) {
+        int status = run_command(parser(data));
+        exit(status);
+      } else {
+        do {
+          waitpid(pid, &status, WUNTRACED);
+        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+      }
+
+      status = (WEXITSTATUS(status) == 100)? 0 : WEXITSTATUS(status);
+      if (strcmp(token->sep_operator, "&&") == 0) {
+        if (status != EXIT_SUCCESS)
+          break;
+      } else if (strcmp(token->sep_operator, "||") == 0) {
+        if (status == EXIT_SUCCESS)
+          break;
+      }
+      continue;
+    }
+
+    command = parse_input(token->data, " ");
+    status = command_execute(command);
+    if (strcmp(token->sep_operator, "&&") == 0) {
+      if (status != EXIT_SUCCESS)
+        break;
+    } else if (strcmp(token->sep_operator, "||") == 0) {
+      if (status == EXIT_SUCCESS)
+        break;
+    }
+  }
   return status;
 }
 
@@ -183,6 +254,7 @@ void loop() {
   char *prompt = "";
   char *line;
   int status = 1;
+  token_t **tokens;
 
   struct sigaction sa;
   sa.sa_handler = sigint_handler;
@@ -202,7 +274,8 @@ void loop() {
     if (!line)
       return;
 
-    status = run_command(line);
+    tokens = parser(line);
+    status = run_command(tokens);
 
   } while (status != 100);
 
