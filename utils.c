@@ -2,6 +2,7 @@
 #include "builtins.h"
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #define SHELL_NAME "cshell"
@@ -91,7 +92,7 @@ char **parse_input(char *input, char *seperator) {
 int command_execute(char **command) {
   if (command[0] == NULL) {
     // Empty command recieved.
-    return 1;
+    return EXIT_SUCCESS;
   }
   for (int i = 0; i < num_builtins(); i++) {
     if (strcmp(command[0], builtins[i]) == 0) {
@@ -103,7 +104,7 @@ int command_execute(char **command) {
   int status;
   if (pid < 0) {
     perror("fork failed");
-    return 0; // stop the shell
+    return 100; // stop the shell
   } else if (pid == 0) {
     // child process
     if (execvp(command[0], command) < 0) {
@@ -116,12 +117,12 @@ int command_execute(char **command) {
     do {
       waitpid(pid, &status, WUNTRACED);
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-
     // WIFEXITED(status) --> true if child terminated normally
     // WIFSIGNALED(status) --> true if child was killed by a signal
   }
 
-  return 1;
+  return WEXITSTATUS(status); // by default 0 -> success , 1 -> failure, but we
+                              // are treating 0 -> failure 1->success
 }
 
 // replaces ENV variable in a command with their actuall value
@@ -142,10 +143,44 @@ void resolve_env(char **command) {
   }
 }
 
+int run_command(char *line) {
+  int semicolon = ';';
+  char *and = "&&";
+  char *or = "||";
+  char **commands;
+  int status = EXIT_SUCCESS;
+  if (strchr(line, semicolon)) {
+    commands = parse_input(line, ";");
+    for (int i = 0; commands[i] != NULL; i++) {
+      status = run_command(commands[i]);
+    }
+    return status;
+  }
+  if (strstr(line, and)) {
+    commands = parse_input(line, and);
+    for (int i = 0; commands[i] != NULL && status == EXIT_SUCCESS; i++) {
+      status = run_command(commands[i]);
+    }
+    return status;
+  }
+
+  if (strstr(line, or)) {
+    commands = parse_input(line, or);
+    status = EXIT_FAILURE;
+    for (int i = 0; commands[i] != NULL && status == EXIT_FAILURE; i++) {
+      status = run_command(commands[i]);
+    }
+    return status;
+  }
+
+  commands = parse_input(line, " ");
+  resolve_env(commands);
+  status = command_execute(commands);
+  return status;
+}
+
 void loop() {
   char *prompt = "";
-  char **commands;
-  char **command_tokens;
   char *line;
   int status = 1;
 
@@ -156,6 +191,7 @@ void loop() {
 
   sigaction(SIGINT, &sa, NULL);
   do {
+    // Set jump point for SIGINT signal_handler to jump to
     if (sigsetjmp(env, 1) == 42) {
       printf("\n");
     }
@@ -166,19 +202,9 @@ void loop() {
     if (!line)
       return;
 
-    commands = parse_input(line, ";");
-        printtokens(commands);
-    if (!commands)
-      return;
-    for (int i = 0; commands[i] != NULL && status; i++) {
-      command_tokens = parse_input(commands[i], TOKEN_SEP);
-      resolve_env(command_tokens);
-      status = command_execute(command_tokens);
-    }
+    status = run_command(line);
 
-  } while (status);
+  } while (status != 100);
 
   free(line);
-  free(command_tokens);
-  free(commands);
 }

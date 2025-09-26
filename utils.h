@@ -10,6 +10,7 @@ char *get_input();
 char **parse_input(char *str, char *seperator);
 int command_execute(char **command);
 void resolve_env(char **command);
+int run_command(char *line);
 
 extern struct sigaction sa;
 
