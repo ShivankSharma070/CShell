@@ -31,7 +31,8 @@ char *get_input() {
   printf("%s $ ", SHELL_NAME);
   while (1) {
     c = getchar();
-    if (c == EOF)  return NULL; 
+    if (c == EOF)
+      return NULL;
 
     if (c == '\n') {
       // append \0 at end of input
@@ -61,7 +62,7 @@ void printtokens(char **tokens) {
   printf("\n");
 }
 
-char **parse_input(char *input) {
+char **parse_input(char *input, char *seperator) {
   char *token;
   int capacity = TOKEN_BUFSIZE;
   char **tokens = malloc(sizeof(char *) * capacity);
@@ -70,7 +71,6 @@ char **parse_input(char *input) {
     return NULL;
   }
 
-  char *seperator = TOKEN_SEP;
   int count = 0;
 
   token = strtok(input, seperator);
@@ -144,9 +144,10 @@ void resolve_env(char **command) {
 
 void loop() {
   char *prompt = "";
-  char **command;
+  char **commands;
+  char **command_tokens;
   char *line;
-  int status;
+  int status = 1;
 
   struct sigaction sa;
   sa.sa_handler = sigint_handler;
@@ -162,17 +163,22 @@ void loop() {
 
     // read input
     line = get_input();
-    if (!line) return; 
+    if (!line)
+      return;
 
-    // parse input
-    command = parse_input(line);
-        if (!command) return;
-    resolve_env(command);
+    commands = parse_input(line, ";");
+        printtokens(commands);
+    if (!commands)
+      return;
+    for (int i = 0; commands[i] != NULL && status; i++) {
+      command_tokens = parse_input(commands[i], TOKEN_SEP);
+      resolve_env(command_tokens);
+      status = command_execute(command_tokens);
+    }
 
-    // exectue command
-    status = command_execute(command);
   } while (status);
 
   free(line);
-  free(command);
+  free(command_tokens);
+  free(commands);
 }
