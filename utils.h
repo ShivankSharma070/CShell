@@ -8,10 +8,9 @@
 void sigint_handler(int signal);
 char *get_input();
 char **parse_input(char *str);
-int command_execute(char **comand);
+int command_execute(char **command);
+void resolve_env(char **command);
 
 extern struct sigaction sa;
-extern sigjmp_buf env;
-extern int jmp_set;
 
 void loop();

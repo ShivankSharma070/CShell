@@ -4,7 +4,9 @@
 
 int execute_cd(char **args) {
     if(args[1] == NULL) {
-        fprintf(stderr, "error: expected arguments for \"cd\"\n");
+        if (chdir(getenv("HOME")) != 0) {
+            perror("chshell");
+        }
     } else {
         if(chdir(args[1]) != 0 ) {
             perror("chshell");

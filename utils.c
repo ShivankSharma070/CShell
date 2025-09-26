@@ -1,6 +1,7 @@
 #include "utils.h"
 #include "builtins.h"
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
 #define SHELL_NAME "cshell"
@@ -8,8 +9,8 @@
 #define TOKEN_BUFSIZE 64
 #define TOKEN_SEP " \t\r\n\a"
 
-int jmp_set;
-sigjmp_buf env;
+static int jmp_set;
+static sigjmp_buf env;
 void sigint_handler(int signal) {
   if (jmp_set) {
     siglongjmp(env, 42);
@@ -30,7 +31,9 @@ char *get_input() {
   printf("%s $ ", SHELL_NAME);
   while (1) {
     c = getchar();
-    if (c == '\n' || c == EOF) {
+    if (c == EOF)  return NULL; 
+
+    if (c == '\n') {
       // append \0 at end of input
       buffer[count] = '\0';
       return buffer;
@@ -47,6 +50,7 @@ char *get_input() {
       }
     }
   }
+  return NULL;
 }
 
 void printtokens(char **tokens) {
@@ -120,6 +124,24 @@ int command_execute(char **command) {
   return 1;
 }
 
+// replaces ENV variable in a command with their actuall value
+void resolve_env(char **command) {
+  for (int i = 0; command[i] != NULL; i++) {
+    if (command[i][0] == '$') {
+      char *env_var = malloc(sizeof(char) * strlen(command[i]));
+      strncpy(env_var, command[i] + 1, strlen(command[i]) - 1);
+      env_var[strlen(command[i]) - 1] = '\0';
+      char *env_value = getenv(env_var);
+      if (env_value) {
+        command[i] = env_value;
+      } else {
+        command[i] = "";
+      }
+      free(env_var);
+    }
+  }
+}
+
 void loop() {
   char *prompt = "";
   char **command;
@@ -128,7 +150,7 @@ void loop() {
 
   struct sigaction sa;
   sa.sa_handler = sigint_handler;
-  sa.sa_flags = 0;
+  sa.sa_flags = SA_RESTART;
   sigemptyset(&sa.sa_mask);
 
   sigaction(SIGINT, &sa, NULL);
@@ -140,9 +162,12 @@ void loop() {
 
     // read input
     line = get_input();
+    if (!line) return; 
 
     // parse input
     command = parse_input(line);
+        if (!command) return;
+    resolve_env(command);
 
     // exectue command
     status = command_execute(command);
