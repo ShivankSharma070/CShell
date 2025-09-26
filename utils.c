@@ -40,7 +40,12 @@ char *get_input() {
       buffer[count] = '\0';
       return buffer;
     }
-
+    if (c == '\\') {
+      if ((c = getchar()) == '\n') {
+        printf("\t >\t");
+        continue;
+      }
+    }
     buffer[count++] = c;
     // If input size exceds double the capacity
     if (count >= capacity) {
@@ -226,7 +231,7 @@ int run_command(token_t **tokens) {
         } while (!WIFEXITED(status) && !WIFSIGNALED(status));
       }
 
-      status = (WEXITSTATUS(status) == 100)? 0 : WEXITSTATUS(status);
+      status = (WEXITSTATUS(status) == 100) ? 0 : WEXITSTATUS(status);
       if (strcmp(token->sep_operator, "&&") == 0) {
         if (status != EXIT_SUCCESS)
           break;
@@ -238,6 +243,7 @@ int run_command(token_t **tokens) {
     }
 
     command = parse_input(token->data, " ");
+    resolve_env(command);
     status = command_execute(command);
     if (strcmp(token->sep_operator, "&&") == 0) {
       if (status != EXIT_SUCCESS)
@@ -280,4 +286,5 @@ void loop() {
   } while (status != 100);
 
   free(line);
+  free(tokens);
 }

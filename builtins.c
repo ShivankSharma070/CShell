@@ -1,4 +1,5 @@
 #include "builtins.h"
+#include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -30,9 +31,13 @@ int execute_exec(char **args) {
   return EXIT_FAILURE;
 }
 
-char *builtins[] = {"cd", "exit", "help", "exec"};
+int negate(char **args) {
+    return !command_execute(args+1);
+}
+
+char *builtins[] = {"cd", "exit", "help", "exec", "!"};
 
 int (*builtins_func[])(char **) = {&execute_cd, &execute_exit, &execute_help,
-                                   &execute_exec};
+                                   &execute_exec, &negate};
 
 size_t num_builtins() { return sizeof(builtins) / sizeof(char *); }
