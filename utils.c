@@ -5,8 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <unistd.h>
 #define SHELL_NAME "cshell"
-#define LINE_BUFSIZE 1024
+#define LINE_BUFSIZE 10
 #define TOKEN_BUFSIZE 64
 #define TOKEN_SEP " \t\r\n\a"
 
@@ -46,6 +47,7 @@ char *get_input() {
         continue;
       }
     }
+
     buffer[count++] = c;
     // If input size exceds double the capacity
     if (count >= capacity) {
@@ -60,14 +62,14 @@ char *get_input() {
   return NULL;
 }
 
-typedef struct token token_t;
+typedef struct command command_t;
 
-typedef struct token {
+typedef struct command {
   char *data;
   char *sep_operator;
-} token_t;
+} command_t;
 
-void printtokens(token_t **tokens) {
+void printcommands(command_t **tokens) {
   int count = 0;
   while (tokens[count] != NULL) {
     printf("%s with operator %s\n", tokens[count]->data,
@@ -77,7 +79,7 @@ void printtokens(token_t **tokens) {
   printf("\n");
 }
 
-char **parse_input(char *input, char *seperator) {
+char **parseCommandIntoTokens(char *input, char *seperator) {
   char *token;
   int capacity = TOKEN_BUFSIZE;
   char **tokens = malloc(sizeof(char *) * capacity);
@@ -103,11 +105,28 @@ char **parse_input(char *input, char *seperator) {
   return tokens;
 }
 
+void setReadPipe(int *readPipe) {
+  if (readPipe == NULL)
+    return;
+  dup2(*readPipe, STDIN_FILENO);
+  close(*readPipe);
+  close(*(readPipe + 1));
+}
+
+void setWritePipe(int *writePipe) {
+  if (writePipe == NULL)
+    return;
+  dup2(*writePipe, STDOUT_FILENO);
+  close(*writePipe);
+  close(*(writePipe - 1));
+}
+
 int command_execute(char **command) {
   if (command[0] == NULL) {
     // Empty command recieved.
     return EXIT_SUCCESS;
   }
+
   for (int i = 0; i < num_builtins(); i++) {
     if (strcmp(command[0], builtins[i]) == 0) {
       return (*builtins_func[i])(command);
@@ -157,8 +176,9 @@ void resolve_env(char **command) {
   }
 }
 
-token_t **parser(char *input) {
-  token_t **tokens = malloc(sizeof(token_t *) * 20);
+// Parses a char * into commands by spilitting them with ||, && ,;
+command_t **parseInputToCommands(char *input) {
+  command_t **commands = malloc(sizeof(command_t *) * 20);
   char *start = input;
   int depth = 0;
   char *p = input;
@@ -188,10 +208,10 @@ token_t **parser(char *input) {
 
       if (seperator_len > 0) {
         size_t len = p - start;
-        token_t *token = malloc(sizeof(token_t));
-        token->data = strndup(start, len);
-        token->sep_operator = sep;
-        tokens[count++] = token;
+        command_t *command = malloc(sizeof(command_t));
+        command->data = strndup(start, len);
+        command->sep_operator = sep;
+        commands[count++] = command;
         p += seperator_len;
         start = p;
       }
@@ -201,29 +221,74 @@ token_t **parser(char *input) {
 
   if (p > start) {
     size_t len = p - start;
-    token_t *token = malloc(sizeof(token_t));
-    token->data = strndup(start, len);
-    token->sep_operator = "";
-    tokens[count++] = token;
+    command_t *command = malloc(sizeof(command_t));
+    command->data = strndup(start, len);
+    command->sep_operator = "";
+    commands[count++] = command;
   }
 
-  tokens[count] = NULL;
+  commands[count] = NULL;
 
-  return tokens;
+  return commands;
 }
 
-int run_command(token_t **tokens) {
+int runPipedCommands(char **commands) {
+    // TODO: refactor this function to use command_execute() 
+  int fd_input = STDIN_FILENO;
   int status = 1;
-  char **command;
-  for (int i = 0; tokens[i] != NULL; i++) {
-    token_t *token = tokens[i];
-    if (strchr(token->data, '(') && strchr(token->data, ')')) {
-      char *first = strchr(token->data, '(');
-      char *last = strchr(token->data, ')');
+  for (int i = 0; commands[i] != NULL; i++) {
+    int pipefd[2];
+    char **tokens = parseCommandIntoTokens(commands[i], TOKEN_SEP);
+    resolve_env(tokens);
+    if (commands[i + 1] != NULL) {
+      pipe(pipefd);
+    }
+    if (fork() == 0) {
+      // child process
+      if (fd_input != STDIN_FILENO) {
+        dup2(fd_input, STDIN_FILENO);
+        close(fd_input);
+      }
+      if (commands[i + 1] != NULL) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+      }
+
+      if (execvp(tokens[0], tokens) < 0) {
+        perror("cshell");
+        exit(EXIT_FAILURE);
+      }
+    } else {
+      // parent process
+      if (fd_input != STDIN_FILENO)
+        close(fd_input);
+      if (commands[i + 1] != NULL) {
+        close(pipefd[1]);
+        fd_input = pipefd[0]; // next read from here
+      }
+    }
+  }
+
+  for (int i = 0; commands[i] != NULL; i++) {
+    wait(NULL);
+  }
+  return status;
+}
+
+int run_commands(command_t **commands) {
+  int status = 1;
+  char **tokens;
+  for (int i = 0; commands[i] != NULL; i++) {
+    command_t *command = commands[i];
+    // If command is to be run in a subshell
+    if (strchr(command->data, '(') && strchr(command->data, ')')) {
+      char *first = strchr(command->data, '(');
+      char *last = strchr(command->data, ')');
       char *data = strndup(first + 1, last - first - 1);
       pid_t pid = fork();
       if (pid == 0) {
-        int status = run_command(parser(data));
+        int status = run_commands(parseInputToCommands(data));
         exit(status);
       } else {
         do {
@@ -232,23 +297,24 @@ int run_command(token_t **tokens) {
       }
 
       status = (WEXITSTATUS(status) == 100) ? 0 : WEXITSTATUS(status);
-      if (strcmp(token->sep_operator, "&&") == 0) {
-        if (status != EXIT_SUCCESS)
-          break;
-      } else if (strcmp(token->sep_operator, "||") == 0) {
-        if (status == EXIT_SUCCESS)
-          break;
-      }
-      continue;
+
+    } else if (strchr(command->data, '|')) {
+      // If command is piped command
+      tokens = parseCommandIntoTokens(command->data, "|");
+      status = runPipedCommands(tokens);
+
+    } else {
+      // If normal command is to be executed
+      tokens = parseCommandIntoTokens(command->data, TOKEN_SEP);
+      resolve_env(tokens);
+      status = command_execute(tokens);
     }
 
-    command = parse_input(token->data, " ");
-    resolve_env(command);
-    status = command_execute(command);
-    if (strcmp(token->sep_operator, "&&") == 0) {
+    // Run next command according to what seperates those commands
+    if (strcmp(command->sep_operator, "&&") == 0) {
       if (status != EXIT_SUCCESS)
         break;
-    } else if (strcmp(token->sep_operator, "||") == 0) {
+    } else if (strcmp(command->sep_operator, "||") == 0) {
       if (status == EXIT_SUCCESS)
         break;
     }
@@ -260,7 +326,7 @@ void loop() {
   char *prompt = "";
   char *line;
   int status = 1;
-  token_t **tokens;
+  command_t **commands;
 
   struct sigaction sa;
   sa.sa_handler = sigint_handler;
@@ -277,14 +343,14 @@ void loop() {
 
     // read input
     line = get_input();
-    if (!line)
+    if (!line) {
       return;
+    }
 
-    tokens = parser(line);
-    status = run_command(tokens);
-
+    commands = parseInputToCommands(line);
+    status = run_commands(commands);
   } while (status != 100);
 
   free(line);
-  free(tokens);
+  free(commands);
 }

@@ -5,14 +5,18 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-typedef struct token token_t;
-void sigint_handler(int signal);
-char *get_input();
-char **parse_input(char *str, char *seperator);
-int command_execute(char **command);
-void resolve_env(char **command);
-int run_command(token_t **parser);
 
 extern struct sigaction sa;
+typedef struct command command_t;
+void sigint_handler(int signal);
+char *get_input();
+command_t **parseInputToCommands(char *input);
+char **parseCommandIntoTokens(char *str, char *seperator);
+void setReadPipe(int *readPipe);
+void setWritePipe(int *writePipe);
+int command_execute(char **command);
+void resolve_env(char **command);
+int runPipedCommands(char **command);
+int run_command(command_t **parser);
 
 void loop();
