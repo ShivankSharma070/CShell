@@ -1,13 +1,10 @@
 #include "utils.h"
-#include <stdlib.h>
-
 int main() {
-    // load config 
+  // load config
 
-    // main loop 
-    loop();
-    
-    // system shutdown, and cleanup
+  // start loop
+  loop();
 
-    return EXIT_SUCCESS;
+  // cleanup and shutdown
+  return 0;
 }
