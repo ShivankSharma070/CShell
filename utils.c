@@ -1,5 +1,7 @@
 #include "utils.h"
 #include "builtins.h"
+#include <ctype.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +13,14 @@
 #define TOKEN_BUFSIZE 64
 #define TOKEN_SEP " \t\r\n\a"
 
+#define ANSI_COLOR_RED "\x1b[31m"
+#define ANSI_COLOR_GREEN "\x1b[32m"
+#define ANSI_COLOR_YELLOW "\x1b[33m"
+#define ANSI_COLOR_BLUE "\x1b[34m"
+#define ANSI_COLOR_MAGENTA "\x1b[35m"
+#define ANSI_COLOR_CYAN "\x1b[36m"
+#define ANSI_COLOR_RESET "\x1b[0m"
+
 static int jmp_set;
 static sigjmp_buf env;
 void sigint_handler(int signal) {
@@ -18,6 +28,26 @@ void sigint_handler(int signal) {
     siglongjmp(env, 42);
   }
 }
+
+typedef struct command command_t;
+typedef struct file file_t;
+typedef struct fdPair fdpair_t;
+
+typedef struct command {
+  char *data;
+  char *sep_operator;
+} command_t;
+
+typedef struct file {
+  char *filename;
+  int f_opts;
+} file_t;
+
+typedef struct fdPair {
+  int (*data)[2];
+  int size;
+  int capacity;
+} fdpair_t;
 
 char *get_input() {
   int capacity = LINE_BUFSIZE;
@@ -61,13 +91,6 @@ char *get_input() {
   }
   return NULL;
 }
-
-typedef struct command command_t;
-
-typedef struct command {
-  char *data;
-  char *sep_operator;
-} command_t;
 
 void printcommands(command_t **tokens) {
   int count = 0;
@@ -121,7 +144,7 @@ void setWritePipe(int *writePipe) {
   close(*(writePipe - 1));
 }
 
-int command_execute(char **command) {
+int command_execute(char **command, fdpair_t *fdpair) {
   if (command[0] == NULL) {
     // Empty command recieved.
     return EXIT_SUCCESS;
@@ -136,9 +159,18 @@ int command_execute(char **command) {
   pid_t pid = fork();
   int status;
   if (pid < 0) {
+
     perror("fork failed");
     return 100; // stop the shell
   } else if (pid == 0) {
+    if (fdpair != NULL) {
+      for (int i = 0; i < fdpair->size; i++) {
+        if (fdpair->data[i][0] != fdpair->data[i][1]) {
+          dup2(fdpair->data[i][0], fdpair->data[i][1]);
+          close(fdpair->data[i][0]);
+        }
+      }
+    }
     // child process
     if (execvp(command[0], command) < 0) {
       perror("cshell");
@@ -233,13 +265,12 @@ command_t **parseInputToCommands(char *input) {
 }
 
 int runPipedCommands(char **commands) {
-    // TODO: refactor this function to use command_execute() 
+  // TODO: refactor this function to use command_execute()
+  // TODO: handle builitns and redirection commands
   int fd_input = STDIN_FILENO;
   int status = 1;
   for (int i = 0; commands[i] != NULL; i++) {
     int pipefd[2];
-    char **tokens = parseCommandIntoTokens(commands[i], TOKEN_SEP);
-    resolve_env(tokens);
     if (commands[i + 1] != NULL) {
       pipe(pipefd);
     }
@@ -255,10 +286,14 @@ int runPipedCommands(char **commands) {
         close(pipefd[1]);
       }
 
-      if (execvp(tokens[0], tokens) < 0) {
-        perror("cshell");
-        exit(EXIT_FAILURE);
-      }
+      command_t **wrapper = malloc(sizeof(command_t *));
+      wrapper[0] = malloc(sizeof(command_t));
+      wrapper[0]->data = commands[i];
+      wrapper[0]->sep_operator = " ";
+      wrapper[1] = NULL;
+      status = run_commands(wrapper);
+            free(wrapper);
+      exit(status);
     } else {
       // parent process
       if (fd_input != STDIN_FILENO)
@@ -276,38 +311,156 @@ int runPipedCommands(char **commands) {
   return status;
 }
 
+int handleSubShell(command_t *command) {
+  int status;
+  char *first = strchr(command->data, '(');
+  char *last = strchr(command->data, ')');
+  char *data = strndup(first + 1, last - first - 1);
+  pid_t pid = fork();
+  if (pid == 0) {
+    int status = run_commands(parseInputToCommands(data));
+    exit(status);
+  } else {
+    do {
+      waitpid(pid, &status, WUNTRACED);
+    } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+  }
+
+  return (WEXITSTATUS(status) == 100) ? 0 : WEXITSTATUS(status);
+}
+
+char *extractOneWord(char *str) {
+  if (str == NULL)
+    return NULL;
+  // eat all space
+  while (isspace(*str)) {
+    str++;
+  };
+  char *word = strndup(str, strchr(str, ' ') - str);
+  return word;
+}
+
+fdpair_t *newfdpair(int initialCapacity) {
+  fdpair_t *newfdpair = malloc(sizeof(fdpair_t));
+  if (newfdpair == NULL)
+    return NULL;
+  newfdpair->data = malloc(initialCapacity * sizeof(int[2]));
+  newfdpair->size = 0;
+  newfdpair->capacity = initialCapacity;
+  return newfdpair;
+}
+
+void pushfdpair(fdpair_t *arr, int a, int b) {
+  if (arr->size >= arr->capacity) {
+    arr->capacity += arr->capacity;
+    arr->data = realloc(arr->data, arr->capacity * sizeof(int[2]));
+  }
+  arr->data[arr->size][0] = a;
+  arr->data[arr->size][1] = b;
+  arr->size++;
+}
+
+void printfdpair(fdpair_t *arr) {
+  for (int i = 0; i < arr->size; i++)
+    printf("%d %d\n", arr->data[i][0], arr->data[i][1]);
+}
+
+int handleRedirection(command_t *command) {
+  int status = EXIT_SUCCESS;
+  int count = 0;
+  fdpair_t *fdpair = newfdpair(2);
+  char *data = command->data;
+  char *cmdToExecute = NULL;
+  int readfd = STDIN_FILENO;
+  int oldreadfd = 0;
+  int writefd = STDOUT_FILENO;
+  int oldwritefd = 1;
+  file_t *readFile = NULL;
+  file_t *writeFile = NULL;
+  while (data[count] != '\0') {
+    if (cmdToExecute == NULL &&
+        (data[count + 1] == '<' || data[count + 1] == '>')) {
+      if (isdigit(data[count]))
+        cmdToExecute = strndup(data, count);
+      else
+        cmdToExecute = strndup(data, count + 1);
+    }
+    if (data[count] == '<') {
+      readFile = malloc(sizeof(file_t));
+      if (data[count - 1] != ' ' && isdigit(data[count - 1])) {
+
+        oldreadfd = data[count - 1] - '0';
+      }
+      if (data[count + 1] == '>') {
+        count++;
+        readFile->f_opts = O_CREAT | O_RDWR;
+      } else {
+        readFile->f_opts = O_RDONLY;
+      }
+      readFile->filename = extractOneWord(data + count + 1);
+    } else if (data[count] == '>') {
+      writeFile = malloc(sizeof(file_t));
+      if (data[count - 1] != ' ' && isdigit(data[count - 1])) {
+        oldwritefd = data[count - 1] - '0';
+      }
+      if (data[count + 1] == '>') {
+        count++;
+        writeFile->f_opts = O_CREAT | O_APPEND | O_WRONLY;
+      } else {
+        writeFile->f_opts = O_CREAT | O_TRUNC | O_WRONLY;
+      }
+      writeFile->filename = extractOneWord(data + count + 1);
+    }
+    count++;
+  }
+
+  if (readFile) {
+    readfd = open(readFile->filename, readFile->f_opts);
+    if (readfd < 0)
+      return EXIT_FAILURE;
+    pushfdpair(fdpair, readfd, oldreadfd);
+  }
+  if (writeFile) {
+    writefd = open(writeFile->filename, writeFile->f_opts, 0644);
+    pushfdpair(fdpair, writefd, oldwritefd);
+  }
+
+  char **tokens = parseCommandIntoTokens(cmdToExecute, TOKEN_SEP);
+  resolve_env(tokens);
+  status = command_execute(tokens, fdpair);
+
+  if (readFile)
+    close(readfd);
+  if (writeFile)
+    close(writefd);
+
+  free(readFile);
+  free(writeFile);
+  free(cmdToExecute);
+  /* free(tokens); */
+  return status;
+}
+
 int run_commands(command_t **commands) {
   int status = 1;
   char **tokens;
   for (int i = 0; commands[i] != NULL; i++) {
     command_t *command = commands[i];
-    // If command is to be run in a subshell
     if (strchr(command->data, '(') && strchr(command->data, ')')) {
-      char *first = strchr(command->data, '(');
-      char *last = strchr(command->data, ')');
-      char *data = strndup(first + 1, last - first - 1);
-      pid_t pid = fork();
-      if (pid == 0) {
-        int status = run_commands(parseInputToCommands(data));
-        exit(status);
-      } else {
-        do {
-          waitpid(pid, &status, WUNTRACED);
-        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-      }
-
-      status = (WEXITSTATUS(status) == 100) ? 0 : WEXITSTATUS(status);
-
+      // Subshell Handling
+      status = handleSubShell(command);
     } else if (strchr(command->data, '|')) {
-      // If command is piped command
+      // Piped Commands
       tokens = parseCommandIntoTokens(command->data, "|");
       status = runPipedCommands(tokens);
-
+    } else if (strchr(command->data, '<') || strchr(command->data, '>')) {
+      // Redirection Commands
+      status = handleRedirection(command);
     } else {
-      // If normal command is to be executed
+      // Normal Command
       tokens = parseCommandIntoTokens(command->data, TOKEN_SEP);
       resolve_env(tokens);
-      status = command_execute(tokens);
+      status = command_execute(tokens, NULL);
     }
 
     // Run next command according to what seperates those commands
@@ -334,8 +487,9 @@ void loop() {
   sigemptyset(&sa.sa_mask);
 
   sigaction(SIGINT, &sa, NULL);
+
   do {
-    // Set jump point for SIGINT signal_handler to jump to
+    // Set jump point for SIGINT to jump to gnal_handler
     if (sigsetjmp(env, 1) == 42) {
       printf("\n");
     }

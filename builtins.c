@@ -32,7 +32,7 @@ int execute_exec(char **args) {
 }
 
 int negate(char **args) {
-    return !command_execute(args+1);
+    return !command_execute(args+1, NULL);
 }
 
 char *builtins[] = {"cd", "exit", "help", "exec", "!"};
