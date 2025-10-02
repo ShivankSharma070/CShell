@@ -2,10 +2,11 @@
 #include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 int execute_cd(char **args) {
-  if (args[1] == NULL) {
+  if (args[1] == NULL || strcmp(args[1],"~") == 0){
     if (chdir(getenv("HOME")) != 0) {
       perror("chshell");
     }

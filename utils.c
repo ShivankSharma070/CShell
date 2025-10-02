@@ -290,7 +290,7 @@ int runPipedCommands(char **commands) {
       wrapper[0]->sep_operator = " ";
       wrapper[1] = NULL;
       status = run_commands(wrapper);
-            free(wrapper);
+      free(wrapper);
       exit(status);
     } else {
       // parent process
@@ -379,18 +379,11 @@ int handleRedirection(command_t *command) {
     if (cmdToExecute == NULL &&
         (data[count + 1] == '<' || data[count + 1] == '>')) {
       if (isdigit(data[count]))
-<<<<<<< HEAD
-        cmdToExecute = strndup(data, count);
+        cmdToExecute =
+            strndup(data, count); // exclude that integer from actual command
       else
         cmdToExecute = strndup(data, count + 1);
     }
-=======
-        cmdToExecute = strndup(data, count); // exclude that integer from actual command
-      else
-        cmdToExecute = strndup(data, count + 1);
-    }
-
->>>>>>> dev
     if (data[count] == '<') {
       readFile = malloc(sizeof(file_t));
       if (data[count - 1] != ' ' && isdigit(data[count - 1])) {
