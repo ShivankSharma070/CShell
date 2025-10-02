@@ -284,7 +284,7 @@ int runPipedCommands(char **commands) {
         close(pipefd[1]);
       }
 
-      command_t **wrapper = malloc(sizeof(command_t *));
+      command_t **wrapper = malloc(sizeof(command_t *)*2);
       wrapper[0] = malloc(sizeof(command_t));
       wrapper[0]->data = commands[i];
       wrapper[0]->sep_operator = " ";
@@ -475,7 +475,6 @@ int run_commands(command_t **commands) {
 }
 
 void loop() {
-  char *prompt = "";
   char *line;
   int status = 1;
   command_t **commands;
