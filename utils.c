@@ -265,8 +265,6 @@ command_t **parseInputToCommands(char *input) {
 }
 
 int runPipedCommands(char **commands) {
-  // TODO: refactor this function to use command_execute()
-  // TODO: handle builitns and redirection commands
   int fd_input = STDIN_FILENO;
   int status = 1;
   for (int i = 0; commands[i] != NULL; i++) {
@@ -381,10 +379,18 @@ int handleRedirection(command_t *command) {
     if (cmdToExecute == NULL &&
         (data[count + 1] == '<' || data[count + 1] == '>')) {
       if (isdigit(data[count]))
+<<<<<<< HEAD
         cmdToExecute = strndup(data, count);
       else
         cmdToExecute = strndup(data, count + 1);
     }
+=======
+        cmdToExecute = strndup(data, count); // exclude that integer from actual command
+      else
+        cmdToExecute = strndup(data, count + 1);
+    }
+
+>>>>>>> dev
     if (data[count] == '<') {
       readFile = malloc(sizeof(file_t));
       if (data[count - 1] != ' ' && isdigit(data[count - 1])) {
